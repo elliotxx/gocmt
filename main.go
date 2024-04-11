@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -99,20 +100,56 @@ func main() {
 	total := len(goFiles)
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, *concurrency)
+	done := make(chan bool)
+	progress := make(chan int)
+	var completed int32
+
+	go func() {
+		for range progress {
+			atomic.AddInt32(&completed, 1)
+			var percent float64
+			if int(completed) >= total {
+				percent = 100.0
+			} else if int(completed) == 0 {
+				percent = 0.0
+			} else {
+				percent = float64(completed) / float64(total) * 100
+			}
+			fmt.Printf("\rProgress: %d/%d, %.2f%%\n", completed, total, percent)
+			if int(completed) >= total {
+				fmt.Println("\nAll files processed.")
+				done <- true
+				break
+			}
+		}
+	}()
+
 	for i, file := range goFiles {
 		wg.Add(1)
-		sem <- struct{}{} // 控制并发数
+		sem <- struct{}{}
 
 		go func(i int, file string) {
+			var (
+				err           error
+				goCodeByte    []byte
+				processedCode string
+				resp          openai.ChatCompletionResponse
+				result        string
+				formatResult  string
+			)
 			defer func() {
+				if err != nil {
+					fmt.Printf("Error: %v, File: %s\n", err, file)
+				}
 				<-sem
 				wg.Done()
+				progress <- i
 			}()
 			log.Printf("Processing file: %s", file)
-			fmt.Printf("» [%d/%d] Processing %s...\n", i+1, total, file)
+			fmt.Printf("» Processing %s...\n", file)
 
 			// Read Go code from file
-			goCodeByte, err := os.ReadFile(file)
+			goCodeByte, err = os.ReadFile(file)
 			if err != nil {
 				log.Printf("Error reading file: %v", err)
 				return
@@ -127,14 +164,14 @@ func main() {
 			}
 
 			// Process Go code
-			processedCode, err := processGoCode(goCode)
+			processedCode, err = processGoCode(goCode)
 			if err != nil {
 				log.Printf("Error processing Go code: %v", err)
 				return
 			}
 
 			// Perform API request and get comments
-			resp, err := client.CreateChatCompletion(
+			resp, err = client.CreateChatCompletion(
 				context.Background(),
 				openai.ChatCompletionRequest{
 					Model:       "moonshot-v1-8k",
@@ -175,15 +212,15 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 			commentsJSON := resp.Choices[0].Message.Content
 
 			// Add the comments to the file.
-			result, err := addComments(goCode, commentsJSON)
+			result, err = addComments(goCode, commentsJSON)
 			if err != nil {
 				log.Printf("Error adding comments to the file: %v", err)
 				return
 			}
 
-			fmt.Printf("✔ [%d/%d] Processed file %s\n", i+1, total, file)
+			fmt.Printf("✔ Processed file %s\n", file)
 
-			formatResult, err := formatGoCode(result)
+			formatResult, err = formatGoCode(result)
 			if err != nil {
 				log.Printf("Error format go code: %v", err)
 				return
@@ -196,7 +233,13 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 			}
 		}(i, file)
 	}
-	wg.Wait()
+
+	go func() {
+		wg.Wait()
+		close(progress)
+	}()
+
+	<-done
 }
 
 // addComments adds comments to the specified Go source file based on the JSON structure.
