@@ -90,14 +90,22 @@ func main() {
 		log.Printf("Processing file: %s", file)
 
 		// Read Go code from file
-		goCode, err := os.ReadFile(file)
+		goCodeByte, err := os.ReadFile(file)
 		if err != nil {
 			log.Printf("Error reading file: %v", err)
 			continue
 		}
+		goCode := string(goCodeByte)
+
+		// Format Go code
+		goCode, err = formatGoCode(goCode)
+		if err != nil {
+			log.Printf("Error format go code: %v", err)
+			continue
+		}
 
 		// Process Go code
-		processedCode, err := processGoCode(string(goCode))
+		processedCode, err := processGoCode(goCode)
 		if err != nil {
 			log.Printf("Error processing Go code: %v", err)
 			continue
@@ -119,29 +127,29 @@ func main() {
 					{
 						Role: openai.ChatMessageRoleUser,
 						Content: fmt.Sprintf(`### Role ###
-You are a Go language expert with a solid foundation in Go and high standards for code comments. Additionally, your English is excellent, enabling you to write professional English comments.
+		You are a Go language expert with a solid foundation in Go and high standards for code comments. Additionally, your English is excellent, enabling you to write professional English comments.
 
-### Requirements ###
-- Add meaningful and technical comments above each structure, method, function, and other key code.
-- Mark the code position and supplementary annotations in a structured manner, and output all the comments that need to be supplemented in JSON format
-- The return result is plain text, and three backticks are not needed.
+		### Requirements ###
+		- Add meaningful and technical comments above each structure, method, function, and other key code.
+		- Mark the code position and supplementary annotations in a structured manner, and output all the comments that need to be supplemented in JSON format
+		- The return result is plain text, and three backticks are not needed.
 
-### Output Format Example ###
-{
-    "comments": [
-        {
-            "position": "type MockManagerInterface interface {",
-            "comment": "MockManagerInterface defines the interface for mock manager."
-        },
-        {
-            "position": "type mockManager struct {",
-            "comment": "mockManager is the implementation that mock manager."
-        }
-    ]
-}
+		### Output Format Example ###
+		{
+		    "comments": [
+		        {
+		            "position": "type MockManagerInterface interface {",
+		            "comment": "MockManagerInterface defines the interface for mock manager."
+		        },
+		        {
+		            "position": "type mockManager struct {",
+		            "comment": "mockManager is the implementation that mock manager."
+		        }
+		    ]
+		}
 
-### Target Code ###
-%s`, processedCode),
+		### Target Code ###
+		%s`, processedCode),
 					},
 				},
 			},
@@ -151,10 +159,9 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 			return
 		}
 		commentsJSON := resp.Choices[0].Message.Content
-		log.Println(commentsJSON)
 
 		// Add the comments to the file.
-		result, err := addComments(string(goCode), commentsJSON)
+		result, err := addComments(goCode, commentsJSON)
 		if err != nil {
 			log.Printf("Error adding comments to the file: %v", err)
 			continue
@@ -178,36 +185,96 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 func addComments(goCode string, commentsJSON string) (string, error) {
 	// Unmarshal the JSON string into a slice of Comment structs.
 	var comments CommentJSON
-	err := json.Unmarshal([]byte(commentsJSON), &comments)
-	if err != nil {
+	if err := json.Unmarshal([]byte(commentsJSON), &comments); err != nil {
 		return "", err
 	}
-
-	// Split the file contents into lines.
-	lines := strings.Split(goCode, "\n")
-
-	// Process each comment and add it to the appropriate line.
-	for _, comment := range comments.Comments {
-		// Find the line number to insert the comment.
-		position := comment.Position
-		lineNumber := 0
-		for _, line := range lines {
-			if strings.Contains(line, position) {
-				break
-			}
-			lineNumber++
-		}
-
-		// If the position is found, insert the comment above the line.
-		if lineNumber < len(lines) {
-			lines[lineNumber] = "// " + comment.Comment + "\n" + lines[lineNumber]
-		}
+	// Parse Go code into an AST (Abstract Syntax Tree).
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "", goCode, parser.ParseComments)
+	if err != nil {
+		return "", fmt.Errorf("parsing Go code: %v", err)
 	}
 
-	// Join the lines back into a single string.
-	newContents := strings.Join(lines, "\n")
+	// Create an ast.CommentMap from the ast.File's comments.
+	// This helps keeping the association between comments
+	// and AST nodes.
+	cmap := ast.NewCommentMap(fset, node, node.Comments)
 
-	return newContents, nil
+	// Traverse the AST to find comment positions and add comments.
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			code := goCode[fset.Position(x.Pos()).Offset:fset.Position(x.End()).Offset]
+			addFunctionComments(cmap, code, x, comments.Comments)
+		case *ast.TypeSpec:
+			code := goCode[fset.Position(x.Pos()).Offset:fset.Position(x.End()).Offset]
+			addTypeComments(cmap, code, x, comments.Comments)
+		case *ast.GenDecl:
+			code := goCode[fset.Position(x.Pos()).Offset:fset.Position(x.End()).Offset]
+			addGeneralComments(cmap, code, x, comments.Comments)
+		}
+		return true
+	})
+
+	// Use the comment map to filter comments that don't belong anymore
+	// (the comments associated with the variable declaration), and create
+	// the new comments list.
+	node.Comments = cmap.Filter(node).Comments()
+
+	// Write the modified AST back to a string.
+	var buf bytes.Buffer
+	if err := format.Node(&buf, fset, node); err != nil {
+		return "", fmt.Errorf("formatting Go code: %v", err)
+	}
+	return buf.String(), nil
+}
+
+// addFunctionComments adds comments to function declarations based on position.
+func addFunctionComments(cmap ast.CommentMap, code string, decl *ast.FuncDecl, comments []Comment) {
+	for _, comment := range comments {
+		if strings.Contains(code, comment.Position) && decl.Doc == nil {
+			cmap[decl] = []*ast.CommentGroup{
+				{
+					List: []*ast.Comment{
+						{
+							Slash: decl.Pos() - 1,
+							Text:  "// " + comment.Comment,
+						},
+					},
+				},
+			}
+			break
+		}
+	}
+}
+
+// addTypeComments adds comments to type declarations based on position.
+func addTypeComments(cmap ast.CommentMap, code string, decl *ast.TypeSpec, comments []Comment) {
+	for _, comment := range comments {
+		if strings.Contains(code, comment.Position) && decl.Doc == nil {
+			cmap[decl] = []*ast.CommentGroup{
+				{
+					List: []*ast.Comment{
+						{
+							Slash: decl.Name.NamePos - 6,
+							Text:  "// " + comment.Comment,
+						},
+					},
+				},
+			}
+			break
+		}
+	}
+}
+
+// addGeneralComments adds comments to general declarations (e.g., variables) based on position.
+func addGeneralComments(cmap ast.CommentMap, code string, decl *ast.GenDecl, comments []Comment) {
+	for _, spec := range decl.Specs {
+		switch x := spec.(type) {
+		case *ast.TypeSpec:
+			addTypeComments(cmap, code, x, comments)
+		}
+	}
 }
 
 func processGoCode(goCode string) (string, error) {
