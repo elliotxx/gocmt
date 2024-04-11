@@ -15,9 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+	"sync"
 
-	"github.com/briandowns/spinner"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -50,6 +49,7 @@ func main() {
 	log.SetOutput(io.MultiWriter(logFile))
 
 	// Parse command line arguments
+	concurrency := flag.Int("n", 1, "number of concurrent executions")
 	fileOrDir := flag.String("f", "", "File or directory containing Go code")
 	flag.Parse()
 
@@ -97,45 +97,53 @@ func main() {
 
 	// Process each Go file
 	total := len(goFiles)
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, *concurrency)
 	for i, file := range goFiles {
-		log.Printf("Processing file: %s", file)
+		wg.Add(1)
+		sem <- struct{}{} // 控制并发数
 
-		// Read Go code from file
-		goCodeByte, err := os.ReadFile(file)
-		if err != nil {
-			log.Printf("Error reading file: %v", err)
-			continue
-		}
-		goCode := string(goCodeByte)
+		go func(i int, file string) {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+			log.Printf("Processing file: %s", file)
+			fmt.Printf("» [%d/%d] Processing %s...\n", i+1, total, file)
 
-		// Format Go code
-		goCode, err = formatGoCode(goCode)
-		if err != nil {
-			log.Printf("Error format go code: %v", err)
-			continue
-		}
+			// Read Go code from file
+			goCodeByte, err := os.ReadFile(file)
+			if err != nil {
+				log.Printf("Error reading file: %v", err)
+				return
+			}
+			goCode := string(goCodeByte)
 
-		// Process Go code
-		processedCode, err := processGoCode(goCode)
-		if err != nil {
-			log.Printf("Error processing Go code: %v", err)
-			continue
-		}
+			// Format Go code
+			goCode, err = formatGoCode(goCode)
+			if err != nil {
+				log.Printf("Error format go code: %v", err)
+				return
+			}
 
-		// Create a spinner for processing indication
-		spinner := NewSpinner(fmt.Sprintf(" [%d/%d] Processing %s...", i+1, total, file))
+			// Process Go code
+			processedCode, err := processGoCode(goCode)
+			if err != nil {
+				log.Printf("Error processing Go code: %v", err)
+				return
+			}
 
-		// Perform API request and get comments
-		resp, err := client.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model:       "moonshot-v1-8k",
-				Temperature: 0.3,
-				MaxTokens:   4096,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role: openai.ChatMessageRoleUser,
-						Content: fmt.Sprintf(`### Role ###
+			// Perform API request and get comments
+			resp, err := client.CreateChatCompletion(
+				context.Background(),
+				openai.ChatCompletionRequest{
+					Model:       "moonshot-v1-8k",
+					Temperature: 0.3,
+					MaxTokens:   4096,
+					Messages: []openai.ChatCompletionMessage{
+						{
+							Role: openai.ChatMessageRoleUser,
+							Content: fmt.Sprintf(`### Role ###
 You are a Go language expert with a solid foundation in Go and high standards for code comments. Additionally, your English is excellent, enabling you to write professional English comments.
 ### Requirements ###
 - Add meaningful and technical comments above each structure, method, function, and other key code.
@@ -156,54 +164,39 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 }
 ### Target Code ###
 %s`, processedCode),
+						},
 					},
 				},
-			},
-		)
-		if err != nil {
-			log.Printf("ChatCompletion error: %v", err)
-			StopSpinner(spinner, fmt.Sprintf("Failed to process file %s", file))
-			continue
-		}
-		commentsJSON := resp.Choices[0].Message.Content
+			)
+			if err != nil {
+				log.Printf("ChatCompletion error: %v", err)
+				return
+			}
+			commentsJSON := resp.Choices[0].Message.Content
 
-		// Add the comments to the file.
-		result, err := addComments(goCode, commentsJSON)
-		if err != nil {
-			log.Printf("Error adding comments to the file: %v", err)
-			StopSpinner(spinner, fmt.Sprintf("Failed to process file %s", file))
-			continue
-		}
+			// Add the comments to the file.
+			result, err := addComments(goCode, commentsJSON)
+			if err != nil {
+				log.Printf("Error adding comments to the file: %v", err)
+				return
+			}
 
-		StopSpinner(spinner, fmt.Sprintf("✔ [%d/%d] Processed file %s", i+1, total, file))
+			fmt.Printf("✔ [%d/%d] Processed file %s\n", i+1, total, file)
 
-		formatResult, err := formatGoCode(result)
-		if err != nil {
-			log.Printf("Error format go code: %v", err)
-			continue
-		}
+			formatResult, err := formatGoCode(result)
+			if err != nil {
+				log.Printf("Error format go code: %v", err)
+				return
+			}
 
-		err = os.WriteFile(file, []byte(formatResult), 0644)
-		if err != nil {
-			log.Printf("Failed to write Go code to file: %v", err)
-			continue
-		}
+			err = os.WriteFile(file, []byte(formatResult), 0644)
+			if err != nil {
+				log.Printf("Failed to write Go code to file: %v", err)
+				return
+			}
+		}(i, file)
 	}
-}
-
-// NewSpinner creates a new spinner.
-func NewSpinner(suffix string) *spinner.Spinner {
-	s := spinner.New(spinner.CharSets[11], 100*time.Millisecond)
-	s.Suffix = suffix
-	_ = s.Color("blue")
-	s.Start()
-	return s
-}
-
-// StopSpinner stops the given spinner.
-func StopSpinner(s *spinner.Spinner, message string) {
-	s.Stop()
-	fmt.Println(message)
+	wg.Wait()
 }
 
 // addComments adds comments to the specified Go source file based on the JSON structure.
@@ -231,12 +224,12 @@ func addComments(goCode string, commentsJSON string) (string, error) {
 		case *ast.FuncDecl:
 			code := goCode[fset.Position(x.Pos()).Offset:fset.Position(x.End()).Offset]
 			addFunctionComments(cmap, code, x, comments.Comments)
-		case *ast.TypeSpec:
-			code := goCode[fset.Position(x.Pos()).Offset:fset.Position(x.End()).Offset]
-			addTypeComments(cmap, code, x, comments.Comments)
-		case *ast.GenDecl:
-			code := goCode[fset.Position(x.Pos()).Offset:fset.Position(x.End()).Offset]
-			addGeneralComments(cmap, code, x, comments.Comments)
+			// case *ast.TypeSpec:
+			// 	code := goCode[fset.Position(x.Pos()).Offset:fset.Position(x.End()).Offset]
+			// 	addTypeComments(cmap, code, x, comments.Comments)
+			// case *ast.GenDecl:
+			// 	code := goCode[fset.Position(x.Pos()).Offset:fset.Position(x.End()).Offset]
+			// 	addGeneralComments(cmap, code, x, comments.Comments)
 		}
 		return true
 	})

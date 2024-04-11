@@ -25,6 +25,7 @@ gocmt -f path/to/foo/
 -   [x] 日志输出
 -   [x] 输出进度条
 -   [x] 忽略单元测试
+-   [x] 并发执行
 -   [ ] 执行前 token 消耗评估
 -   [ ] 配置 maxLineWidth
 -   [ ] 扫描不合规的注释
