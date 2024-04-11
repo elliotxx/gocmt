@@ -73,7 +73,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
+			if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
 				goFiles = append(goFiles, path)
 			}
 			return nil
