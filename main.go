@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -83,45 +84,77 @@ func main() {
 	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
 
 	// Parse command line arguments
-	fileName := flag.String("file", "", "File containing Go code")
+	fileOrDir := flag.String("f", "", "File or directory containing Go code")
 	flag.Parse()
 
-	if *fileName == "" {
-		log.Println("Please provide a file containing Go code using -file flag.")
+	if *fileOrDir == "" {
+		log.Println("Please provide a file or directory containing Go code using -f flag.")
 		return
 	}
 
-	// Read Go code from file
-	goCode, err := os.ReadFile(*fileName)
+	var goFiles []string
+
+	// Check if the specified path is a directory or a file
+	fileInfo, err := os.Stat(*fileOrDir)
 	if err != nil {
-		log.Printf("Error reading file: %v", err)
+		log.Printf("Error accessing file or directory: %v", err)
 		return
 	}
 
-	// Process Go code
-	processedCode, err := processGoCode(string(goCode))
-	if err != nil {
-		log.Printf("Error processing Go code: %v", err)
-		return
+	if fileInfo.IsDir() {
+		// If it's a directory, recursively find all Go files
+		err := filepath.Walk(*fileOrDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
+				goFiles = append(goFiles, path)
+			}
+			return nil
+		})
+		if err != nil {
+			log.Printf("Error walking directory: %v", err)
+			return
+		}
+	} else {
+		// If it's a file, add it directly
+		goFiles = append(goFiles, *fileOrDir)
 	}
-	log.Println(processedCode)
 
-	token := os.Getenv("MOONSHOT_API_KEY")
-	if token == "" {
-		log.Println("The environment variable MOONSHOT_API_KEY is not set.")
-		return
-	}
+	// Process each Go file
+	for _, file := range goFiles {
+		log.Printf("Processing file: %s", file)
 
-	client := NewMoonShotClient(token)
-	resp, err := client.CreateChatCompletion(
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model:       "moonshot-v1-8k",
-			Temperature: 0.3,
-			Messages: []openai.ChatCompletionMessage{
-				{
-					Role: openai.ChatMessageRoleUser,
-					Content: fmt.Sprintf(`### Role ###
+		// Read Go code from file
+		goCode, err := os.ReadFile(file)
+		if err != nil {
+			log.Printf("Error reading file: %v", err)
+			continue
+		}
+
+		// Process Go code
+		processedCode, err := processGoCode(string(goCode))
+		if err != nil {
+			log.Printf("Error processing Go code: %v", err)
+			continue
+		}
+
+		token := os.Getenv("MOONSHOT_API_KEY")
+		if token == "" {
+			log.Println("The environment variable MOONSHOT_API_KEY is not set.")
+			return
+		}
+
+		client := NewMoonShotClient(token)
+		resp, err := client.CreateChatCompletion(
+			context.Background(),
+			openai.ChatCompletionRequest{
+				Model:       "moonshot-v1-8k",
+				Temperature: 0.3,
+				Messages: []openai.ChatCompletionMessage{
+					{
+						Role: openai.ChatMessageRoleUser,
+						Content: fmt.Sprintf(`### Role ###
 You are a Go language expert with a solid foundation in Go and high standards for code comments. Additionally, your English is excellent, enabling you to write professional English comments.
 
 ### Requirements ###
@@ -145,35 +178,35 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 
 ### Target Code ###
 %s`, processedCode),
+					},
 				},
 			},
-		},
-	)
-	if err != nil {
-		log.Printf("ChatCompletion error: %v", err)
-		return
-	}
-	commentsJSON := resp.Choices[0].Message.Content
-	log.Println(commentsJSON)
+		)
+		if err != nil {
+			log.Printf("ChatCompletion error: %v", err)
+			return
+		}
+		commentsJSON := resp.Choices[0].Message.Content
+		log.Println(commentsJSON)
 
-	// Add the comments to the file.
-	result, err := AddComments(string(goCode), commentsJSON)
-	if err != nil {
-		log.Printf("Error adding comments to the file: %v", err)
-		os.Exit(1)
-	}
+		// Add the comments to the file.
+		result, err := AddComments(string(goCode), commentsJSON)
+		if err != nil {
+			log.Printf("Error adding comments to the file: %v", err)
+			continue
+		}
 
-	formatResult, err := formatGoCode(result)
-	if err != nil {
-		log.Printf("Error format go code: %v", err)
-		os.Exit(1)
-	}
-	log.Println(formatResult)
+		formatResult, err := formatGoCode(result)
+		if err != nil {
+			log.Printf("Error format go code: %v", err)
+			continue
+		}
 
-	err = os.WriteFile(*fileName, []byte(formatResult), 0644)
-	if err != nil {
-		log.Printf("Failed to write Go code to file: %v", err)
-		os.Exit(1)
+		err = os.WriteFile(file, []byte(formatResult), 0644)
+		if err != nil {
+			log.Printf("Failed to write Go code to file: %v", err)
+			continue
+		}
 	}
 }
 
