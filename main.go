@@ -15,7 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/briandowns/spinner"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -45,7 +47,7 @@ func main() {
 	}
 	defer logFile.Close()
 
-	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	log.SetOutput(io.MultiWriter(logFile))
 
 	// Parse command line arguments
 	fileOrDir := flag.String("f", "", "File or directory containing Go code")
@@ -85,8 +87,17 @@ func main() {
 		goFiles = append(goFiles, *fileOrDir)
 	}
 
+	// Create MoonShot API client
+	token := os.Getenv("MOONSHOT_API_KEY")
+	if token == "" {
+		fmt.Println("The environment variable MOONSHOT_API_KEY is not set.")
+		os.Exit(1)
+	}
+	client := NewMoonShotClient(token)
+
 	// Process each Go file
-	for _, file := range goFiles {
+	total := len(goFiles)
+	for i, file := range goFiles {
 		log.Printf("Processing file: %s", file)
 
 		// Read Go code from file
@@ -111,13 +122,10 @@ func main() {
 			continue
 		}
 
-		token := os.Getenv("MOONSHOT_API_KEY")
-		if token == "" {
-			log.Println("The environment variable MOONSHOT_API_KEY is not set.")
-			return
-		}
+		// Create a spinner for processing indication
+		spinner := NewSpinner(fmt.Sprintf(" [%d/%d] Processing %s...", i+1, total, file))
 
-		client := NewMoonShotClient(token)
+		// Perform API request and get comments
 		resp, err := client.CreateChatCompletion(
 			context.Background(),
 			openai.ChatCompletionRequest{
@@ -127,36 +135,34 @@ func main() {
 					{
 						Role: openai.ChatMessageRoleUser,
 						Content: fmt.Sprintf(`### Role ###
-		You are a Go language expert with a solid foundation in Go and high standards for code comments. Additionally, your English is excellent, enabling you to write professional English comments.
-
-		### Requirements ###
-		- Add meaningful and technical comments above each structure, method, function, and other key code.
-		- Mark the code position and supplementary annotations in a structured manner, and output all the comments that need to be supplemented in JSON format
-		- The return result is plain text, and three backticks are not needed.
-
-		### Output Format Example ###
-		{
-		    "comments": [
-		        {
-		            "position": "type MockManagerInterface interface {",
-		            "comment": "MockManagerInterface defines the interface for mock manager."
-		        },
-		        {
-		            "position": "type mockManager struct {",
-		            "comment": "mockManager is the implementation that mock manager."
-		        }
-		    ]
-		}
-
-		### Target Code ###
-		%s`, processedCode),
+You are a Go language expert with a solid foundation in Go and high standards for code comments. Additionally, your English is excellent, enabling you to write professional English comments.
+### Requirements ###
+- Add meaningful and technical comments above each structure, method, function, and other key code.
+- Mark the code position and supplementary annotations in a structured manner, and output all the comments that need to be supplemented in JSON format
+- The return result is plain text, and three backticks are not needed.
+### Output Format Example ###
+{
+    "comments": [
+        {
+            "position": "type MockManagerInterface interface {",
+            "comment": "MockManagerInterface defines the interface for mock manager."
+        },
+        {
+            "position": "type mockManager struct {",
+            "comment": "mockManager is the implementation that mock manager."
+        }
+    ]
+}
+### Target Code ###
+%s`, processedCode),
 					},
 				},
 			},
 		)
 		if err != nil {
 			log.Printf("ChatCompletion error: %v", err)
-			return
+			StopSpinner(spinner, fmt.Sprintf("Failed to process file %s", file))
+			continue
 		}
 		commentsJSON := resp.Choices[0].Message.Content
 
@@ -164,8 +170,11 @@ func main() {
 		result, err := addComments(goCode, commentsJSON)
 		if err != nil {
 			log.Printf("Error adding comments to the file: %v", err)
+			StopSpinner(spinner, fmt.Sprintf("Failed to process file %s", file))
 			continue
 		}
+
+		StopSpinner(spinner, fmt.Sprintf("✔ [%d/%d] Processed file %s", i+1, total, file))
 
 		formatResult, err := formatGoCode(result)
 		if err != nil {
@@ -179,6 +188,21 @@ func main() {
 			continue
 		}
 	}
+}
+
+// NewSpinner creates a new spinner.
+func NewSpinner(suffix string) *spinner.Spinner {
+	s := spinner.New(spinner.CharSets[11], 100*time.Millisecond)
+	s.Suffix = suffix
+	_ = s.Color("blue")
+	s.Start()
+	return s
+}
+
+// StopSpinner stops the given spinner.
+func StopSpinner(s *spinner.Spinner, message string) {
+	s.Stop()
+	fmt.Println(message)
 }
 
 // addComments adds comments to the specified Go source file based on the JSON structure.
