@@ -36,42 +36,6 @@ type Comment struct {
 	Comment  string `json:"comment"`
 }
 
-// AddComments adds comments to the specified Go source file based on the JSON structure.
-func AddComments(goCode string, commentsJSON string) (string, error) {
-	// Unmarshal the JSON string into a slice of Comment structs.
-	var comments CommentJSON
-	err := json.Unmarshal([]byte(commentsJSON), &comments)
-	if err != nil {
-		return "", err
-	}
-
-	// Split the file contents into lines.
-	lines := strings.Split(goCode, "\n")
-
-	// Process each comment and add it to the appropriate line.
-	for _, comment := range comments.Comments {
-		// Find the line number to insert the comment.
-		position := comment.Position
-		lineNumber := 0
-		for _, line := range lines {
-			if strings.Contains(line, position) {
-				break
-			}
-			lineNumber++
-		}
-
-		// If the position is found, insert the comment above the line.
-		if lineNumber < len(lines) {
-			lines[lineNumber] = "// " + comment.Comment + "\n" + lines[lineNumber]
-		}
-	}
-
-	// Join the lines back into a single string.
-	newContents := strings.Join(lines, "\n")
-
-	return newContents, nil
-}
-
 func main() {
 	// Setting up logger
 	logFile, err := os.OpenFile("logfile.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -158,7 +122,7 @@ func main() {
 You are a Go language expert with a solid foundation in Go and high standards for code comments. Additionally, your English is excellent, enabling you to write professional English comments.
 
 ### Requirements ###
-- Add appropriate comments above each structure, method, function, and other key code.
+- Add meaningful and technical comments above each structure, method, function, and other key code.
 - Mark the code position and supplementary annotations in a structured manner, and output all the comments that need to be supplemented in JSON format
 - The return result is plain text, and three backticks are not needed.
 
@@ -190,7 +154,7 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 		log.Println(commentsJSON)
 
 		// Add the comments to the file.
-		result, err := AddComments(string(goCode), commentsJSON)
+		result, err := addComments(string(goCode), commentsJSON)
 		if err != nil {
 			log.Printf("Error adding comments to the file: %v", err)
 			continue
@@ -208,6 +172,42 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 			continue
 		}
 	}
+}
+
+// addComments adds comments to the specified Go source file based on the JSON structure.
+func addComments(goCode string, commentsJSON string) (string, error) {
+	// Unmarshal the JSON string into a slice of Comment structs.
+	var comments CommentJSON
+	err := json.Unmarshal([]byte(commentsJSON), &comments)
+	if err != nil {
+		return "", err
+	}
+
+	// Split the file contents into lines.
+	lines := strings.Split(goCode, "\n")
+
+	// Process each comment and add it to the appropriate line.
+	for _, comment := range comments.Comments {
+		// Find the line number to insert the comment.
+		position := comment.Position
+		lineNumber := 0
+		for _, line := range lines {
+			if strings.Contains(line, position) {
+				break
+			}
+			lineNumber++
+		}
+
+		// If the position is found, insert the comment above the line.
+		if lineNumber < len(lines) {
+			lines[lineNumber] = "// " + comment.Comment + "\n" + lines[lineNumber]
+		}
+	}
+
+	// Join the lines back into a single string.
+	newContents := strings.Join(lines, "\n")
+
+	return newContents, nil
 }
 
 func processGoCode(goCode string) (string, error) {
