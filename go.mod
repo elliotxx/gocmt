@@ -1,4 +1,4 @@
-module github.com/elliotxx/better-comment
+module github.com/elliotxx/gocmt
 
 go 1.19
 
