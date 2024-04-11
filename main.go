@@ -131,6 +131,7 @@ func main() {
 			openai.ChatCompletionRequest{
 				Model:       "moonshot-v1-8k",
 				Temperature: 0.3,
+				MaxTokens:   4096,
 				Messages: []openai.ChatCompletionMessage{
 					{
 						Role: openai.ChatMessageRoleUser,
