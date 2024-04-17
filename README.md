@@ -27,6 +27,7 @@ gocmt -f path/to/foo/
 -   [x] 忽略单元测试
 -   [x] 并发执行
 -   [x] 识别 git diff 对最近一次变更受影响的文件补充注释
+-   [ ] 支持 --exclude 用来忽略指定目录
 -   [ ] 执行前 token 消耗评估
 -   [ ] 配置 maxLineWidth
 -   [ ] 扫描不合规的注释
