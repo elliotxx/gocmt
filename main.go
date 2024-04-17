@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -39,6 +40,29 @@ type Comment struct {
 	Comment  string `json:"comment"`
 }
 
+func printHelp() {
+	helpText := `Usage: gocmt [options]
+
+Options:
+  -f  string
+    File or directory containing Go code.
+  -c  string
+    Specify a commit hash or reference (e.g., HEAD, HEAD^, commitID1...commitID2)
+  -n  int
+    Number of concurrent executions
+  -h  bool
+    Show this help message and exit
+
+Examples:
+  gocmt -f /path/to/example.go
+  gocmt -f /path/to/dir/
+  gocmt -c HEAD
+  gocmt -c HEAD^
+  gocmt -c commitID1...commitID2
+`
+	fmt.Println(helpText)
+}
+
 func main() {
 	// Setting up logger
 	logFile, err := os.OpenFile("logfile.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -51,48 +75,57 @@ func main() {
 	log.SetOutput(io.MultiWriter(logFile))
 
 	// Parse command line arguments
-	concurrency := flag.Int("n", 1, "number of concurrent executions")
+	concurrency := flag.Int("n", 1, "Number of concurrent executions")
 	fileOrDir := flag.String("f", "", "File or directory containing Go code")
+	commitFlag := flag.String("c", "", "Specify a commit hash or reference (e.g., HEAD, HEAD^, commitID1...commitID2)")
+	helpFlag := flag.Bool("h", false, "Show this help message and exit")
+
 	flag.Parse()
 
-	if *fileOrDir == "" {
-		log.Println("Please provide a file or directory containing Go code using -f flag.")
+	if *helpFlag {
+		printHelp()
+		return
+	}
+
+	if *commitFlag != "" && *fileOrDir != "" {
+		fmt.Printf("× Error: -f and -c cannot be specified at same time.\n\n")
+		printHelp()
+		return
+	}
+
+	if *commitFlag == "" && *fileOrDir == "" {
+		fmt.Printf("× Error: please provide a file or directory containing Go code using -f or -c flag.\n\n")
+		printHelp()
 		return
 	}
 
 	var goFiles []string
-
-	// Check if the specified path is a directory or a file
-	fileInfo, err := os.Stat(*fileOrDir)
-	if err != nil {
-		log.Printf("Error accessing file or directory: %v", err)
-		return
-	}
-
-	if fileInfo.IsDir() {
-		// If it's a directory, recursively find all Go files
-		err := filepath.Walk(*fileOrDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
-				goFiles = append(goFiles, path)
-			}
-			return nil
-		})
+	var fileOrDirList []string
+	if *fileOrDir != "" {
+		fileOrDirList = []string{*fileOrDir}
+	} else if *commitFlag != "" {
+		fileOrDirList, err = gitDiff(*commitFlag)
 		if err != nil {
-			log.Printf("Error walking directory: %v", err)
+			fmt.Printf("× Error: get change files by -c %s as %v\n", *commitFlag, err)
 			return
 		}
+	}
+	goFiles, err = getGoFiles(fileOrDirList)
+	if err != nil {
+		fmt.Printf("× Error: get go files as %v\n", err)
+		return
+	}
+	if len(goFiles) == 0 {
+		fmt.Println("Hint: no go files found for processing.")
+		return
 	} else {
-		// If it's a file, add it directly
-		goFiles = append(goFiles, *fileOrDir)
+		fmt.Printf("» Comments will be added to these go files soon:\n%s\n\n", strings.Join(goFiles, "\n"))
 	}
 
 	// Create MoonShot API client
 	token := os.Getenv("MOONSHOT_API_KEY")
 	if token == "" {
-		fmt.Println("The environment variable MOONSHOT_API_KEY is not set.")
+		fmt.Println("× Error: the environment variable MOONSHOT_API_KEY is not set.")
 		os.Exit(1)
 	}
 	client := NewMoonShotClient(token)
@@ -140,7 +173,7 @@ func main() {
 			)
 			defer func() {
 				if err != nil {
-					fmt.Printf("Error: %v, File: %s\n", err, file)
+					fmt.Printf("× Error: %v, File: %s\n", err, file)
 				}
 				<-sem
 				wg.Done()
@@ -152,7 +185,7 @@ func main() {
 			// Read Go code from file
 			goCodeByte, err = os.ReadFile(file)
 			if err != nil {
-				log.Printf("Error reading file: %v", err)
+				log.Printf("× Error reading file: %v", err)
 				return
 			}
 			goCode := string(goCodeByte)
@@ -160,7 +193,7 @@ func main() {
 			// Format Go code
 			goCode, err = formatGoCode(goCode)
 			if err != nil {
-				log.Printf("Error format go code: %v", err)
+				log.Printf("× Error format go code: %v", err)
 				return
 			}
 
@@ -168,7 +201,7 @@ func main() {
 			log.Printf("Go code before process:\n%s", goCode)
 			processedCode, err = processGoCode(goCode)
 			if err != nil {
-				log.Printf("Error processing Go code: %v", err)
+				log.Printf("× Error processing Go code: %v", err)
 				return
 			}
 			log.Printf("Go code after process:\n%s", goCode)
@@ -217,7 +250,7 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 			// Add the comments to the file.
 			result, err = addComments(goCode, commentsJSON)
 			if err != nil {
-				log.Printf("Error adding comments to the file: %v", err)
+				log.Printf("× Error adding comments to the file: %v", err)
 				return
 			}
 
@@ -225,7 +258,7 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 
 			formatResult, err = formatGoCode(result)
 			if err != nil {
-				log.Printf("Error format go code: %v", err)
+				log.Printf("× Error format go code: %v", err)
 				return
 			}
 
@@ -243,6 +276,64 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 	}()
 
 	<-done
+}
+
+func getGoFiles(fileOrDirList []string) ([]string, error) {
+	var goFiles []string
+	for _, f := range fileOrDirList {
+		// Check if the specified path is a directory or a file
+		fileInfo, err := os.Stat(f)
+		if err != nil {
+			log.Printf("× Error accessing file or directory: %v", err)
+			return nil, err
+		}
+
+		if fileInfo.IsDir() {
+			// If it's a directory, recursively find all Go files
+			err := filepath.Walk(f, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+					goFiles = append(goFiles, path)
+				}
+				return nil
+			})
+			if err != nil {
+				log.Printf("× Error walking directory: %v", err)
+				return nil, err
+			}
+		} else {
+			if strings.HasSuffix(fileInfo.Name(), ".go") && !strings.HasSuffix(fileInfo.Name(), "_test.go") {
+				goFiles = append(goFiles, f)
+			}
+		}
+	}
+	return goFiles, nil
+}
+
+func gitDiff(commitOrRef string) ([]string, error) {
+	files, err := gitCommand("diff", "--name-only", "--diff-filter=ACMR", commitOrRef)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("Changed files of %s:\n%s\n", commitOrRef, files)
+	files = strings.TrimSpace(files)
+	return strings.Split(files, "\n"), nil
+}
+
+func gitCommand(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("failed to execute git command: %v", err)
+	}
+
+	return strings.TrimSpace(out.String()), nil
 }
 
 // addComments adds comments to the specified Go source file based on the JSON structure.
