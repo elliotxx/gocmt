@@ -38,7 +38,7 @@ Examples:
 
 The go source code of no comment to be processed:
 
-```bash
+```go
 $ cat handler.go
 package handler
 
@@ -83,10 +83,10 @@ Execute `gocmt`:
 ```bash
 $ gocmt -f handler.go
 » Comments will be added to these go files soon:
-/Users/yym/tmp/test.go
+handler.go
 
-» Processing /Users/yym/tmp/test.go...
-✔ Processed file /Users/yym/tmp/test.go
+» Processing handler.go...
+✔ Processed file handler.go
 Progress: 1/1, 100.00%
 
 All files processed.
@@ -94,7 +94,7 @@ All files processed.
 
 After processing with `gocmt`:
 
-```bash
+```go
 $ cat handler.go
 package handler
 
