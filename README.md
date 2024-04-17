@@ -7,14 +7,152 @@
 ## Installation
 
 ```bash
-go install github.com/elliotxx/gocmt
+go install github.com/elliotxx/gocmt@latest
 ```
 
 ## Usage
 
 ```bash
-gocmt -f example.go
-gocmt -f path/to/foo/
+$ gocmt -h
+Usage: gocmt [options]
+
+Options:
+  -f  string
+    File or directory containing Go code.
+  -c  string
+    Specify a commit hash or reference (e.g., HEAD, HEAD^, commitID1...commitID2)
+  -n  int
+    Number of concurrent executions
+  -h  bool
+    Show this help message and exit
+
+Examples:
+  gocmt -f /path/to/example.go
+  gocmt -f /path/to/dir/
+  gocmt -c HEAD
+  gocmt -c HEAD^
+  gocmt -c commitID1...commitID2
+```
+
+## Example
+
+The go source code of no comment to be processed:
+
+```bash
+$ cat handler.go
+package handler
+
+func printDebugf(format string, args ...interface{}) {
+}
+
+type ErrorResponse struct {
+}
+
+func (e *ErrorResponse) String() string {
+}
+
+func Respond(w http.ResponseWriter, code int, src interface{}) {
+}
+
+func Error(w http.ResponseWriter, code int, err error, msg string) {
+}
+
+func JSON(w http.ResponseWriter, code int, src interface{}) {
+}
+
+type Handler struct {}
+
+func (h Handler) Routes() *router.Router {
+}
+
+func (h Handler) Run(port int) error {
+}
+
+func (h Handler) getUser(w http.ResponseWriter, r *http.Request, id int) {
+}
+
+func (h Handler) getUsers(w http.ResponseWriter, r *http.Request) {
+}
+
+func (h Handler) createUser(w http.ResponseWriter, r *http.Request) {
+}
+```
+
+Execute `gocmt`:
+
+```bash
+$ gocmt -f handler.go
+» Comments will be added to these go files soon:
+/Users/yym/tmp/test.go
+
+» Processing /Users/yym/tmp/test.go...
+✔ Processed file /Users/yym/tmp/test.go
+Progress: 1/1, 100.00%
+
+All files processed.
+```
+
+After processing with `gocmt`:
+
+```bash
+$ cat handler.go
+package handler
+
+// printDebugf printing debug information in a formatted manner.
+func printDebugf(format string, args ...interface{}) {
+}
+
+type ErrorResponse struct {
+}
+
+// String returns the error message in string format.
+func (e *ErrorResponse) String() string {
+}
+
+// Respond send a response with a given status code and source data.
+func Respond(w http.ResponseWriter, code int, src interface{}) {
+}
+
+// Error send an error response with a given status code, error, and message.
+func Error(w http.ResponseWriter, code int, err error, msg string) {
+}
+
+// JSON send a JSON response with a given status code and source data.
+func JSON(w http.ResponseWriter, code int, src interface{}) {
+}
+
+type Handler struct {}
+
+// Routes returns the router with all the routes configured.
+func (h Handler) Routes() *router.Router {
+}
+
+// Run starts the HTTP server on the given port and listens for incoming requests.
+func (h Handler) Run(port int) error {
+}
+
+// getUser handles the GET request for fetching a single user by ID.
+func (h Handler) getUser(w http.ResponseWriter, r *http.Request, id int) {
+}
+
+// getUsers handles the GET request for fetching all the users.
+func (h Handler) getUsers(w http.ResponseWriter, r *http.Request) {
+}
+
+// createUser handles the POST request for creating a new user.
+func (h Handler) createUser(w http.ResponseWriter, r *http.Request) {
+}
+```
+
+If you forgot to add comments in the latest git commit, you can do this:
+
+```bash
+$ gocmt -c HEAD^
+
+# Or you can specify commit:
+$ gocmt -c <commit-id>
+# And this:
+$ gocmt -c <commit-id-a>...<commid-id-b>
 ```
 
 ## TODO
