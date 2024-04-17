@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -164,11 +165,13 @@ func main() {
 			}
 
 			// Process Go code
+			log.Printf("Go code before process:\n%s", goCode)
 			processedCode, err = processGoCode(goCode)
 			if err != nil {
 				log.Printf("Error processing Go code: %v", err)
 				return
 			}
+			log.Printf("Go code after process:\n%s", goCode)
 
 			// Perform API request and get comments
 			resp, err = client.CreateChatCompletion(
@@ -359,7 +362,18 @@ func processGoCode(goCode string) (string, error) {
 	if err := format.Node(&buf, fset, node); err != nil {
 		return "", fmt.Errorf("formatting Go code: %w", err)
 	}
-	return buf.String(), nil
+	return removePackageAndImports(buf.String())
+}
+
+func removePackageAndImports(goCode string) (string, error) {
+	re := regexp.MustCompile(`(?s)package\s+\w+\s+import\s+\((.*?)\)`)
+	matches := re.FindStringSubmatch(goCode)
+	if len(matches) < 2 {
+		return "", fmt.Errorf("package or import section not found")
+	}
+
+	cleanedCode := strings.ReplaceAll(goCode, matches[0], "")
+	return strings.TrimSpace(cleanedCode), nil
 }
 
 func formatGoCode(goCode string) (string, error) {
