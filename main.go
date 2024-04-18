@@ -399,12 +399,13 @@ func addComments(goCode string, commentsJSON string) (string, error) {
 func addFunctionComments(cmap ast.CommentMap, code string, decl *ast.FuncDecl, comments []Comment) {
 	for _, comment := range comments {
 		if strings.Contains(code, comment.Position) && decl.Doc == nil {
+			commentStr := strings.ReplaceAll(comment.Comment, "\n", "\n// ")
 			cmap[decl] = []*ast.CommentGroup{
 				{
 					List: []*ast.Comment{
 						{
 							Slash: decl.Pos() - 1,
-							Text:  "// " + comment.Comment,
+							Text:  "// " + commentStr,
 						},
 					},
 				},
