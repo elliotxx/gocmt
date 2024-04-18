@@ -165,8 +165,14 @@ $ gocmt -c <commit-id-a>...<commid-id-b>
 -   [x] 忽略单元测试
 -   [x] 并发执行
 -   [x] 识别 git diff 对最近一次变更受影响的文件补充注释
+-   [ ] 支持补充 godoc example
+-   [ ] 支持补充 openapi 格式的注释
+-   [ ] 支持 -V 查看版本号
+-   [ ] 优化 prompt 返回结果，不需要空格和回车
+-   [ ] 支持 homebrew 安装
 -   [ ] 支持 --exclude 用来忽略指定目录
 -   [ ] 失败重试机制
+-   [ ] 限制输入和输出的长度
 -   [ ] 支持 -f 指定多个路径
 -   [ ] 执行前 token 消耗评估
 -   [ ] 配置 maxLineWidth
