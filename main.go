@@ -24,9 +24,13 @@ import (
 )
 
 // NewMoonShotClient creates a new MoonShot API client.
-func NewMoonShotClient(authToken string) *openai.Client {
+func NewMoonShotClient(baseURL, authToken string) *openai.Client {
 	config := openai.DefaultConfig(authToken)
-	config.BaseURL = "https://api.moonshot.cn/v1"
+	if len(baseURL) == 0 {
+		config.BaseURL = "https://api.moonshot.cn/v1"
+	} else {
+		config.BaseURL = baseURL
+	}
 	return openai.NewClientWithConfig(config)
 }
 
@@ -128,7 +132,8 @@ func main() {
 		fmt.Println("× Error: the environment variable MOONSHOT_API_KEY is not set.")
 		os.Exit(1)
 	}
-	client := NewMoonShotClient(token)
+	baseURL := os.Getenv("MOONSHOT_BASE_URL")
+	client := NewMoonShotClient(baseURL, token)
 
 	// Process each Go file
 	total := len(goFiles)
@@ -246,6 +251,12 @@ You are a Go language expert with a solid foundation in Go and high standards fo
 				return
 			}
 			commentsJSON := resp.Choices[0].Message.Content
+			log.Printf("ChatCompletion result:\n%s\n", commentsJSON)
+
+			// Process ChatCompletion result string
+			re := regexp.MustCompile("(^```json\n)|(```$)")
+			commentsJSON = re.ReplaceAllString(commentsJSON, "")
+			commentsJSON = strings.TrimSpace(commentsJSON)
 
 			// Add the comments to the file.
 			result, err = addComments(goCode, commentsJSON)
